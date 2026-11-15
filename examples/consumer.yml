@@ -1,0 +1,22 @@
+# Copy to the consuming repository as .github/workflows/security.yml
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    uses: tiny0Xy9/security-ci/.github/workflows/security.yml@main
+    with:
+      run_secrets: true
+      run_sast: true
+      run_sca: true
+      run_iac: true
+      run_actions: true
+      fail_on_findings: true
