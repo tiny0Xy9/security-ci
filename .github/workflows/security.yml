@@ -1,0 +1,128 @@
+name: Reusable security scan
+
+on:
+  workflow_call:
+    inputs:
+      run_secrets:
+        type: boolean
+        default: true
+      run_sast:
+        type: boolean
+        default: true
+      run_sca:
+        type: boolean
+        default: true
+      run_iac:
+        type: boolean
+        default: true
+      run_actions:
+        type: boolean
+        default: true
+      fail_on_findings:
+        description: "Fail checks when scanners report findings"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    if: inputs.run_secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan secrets with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: ${{ !inputs.fail_on_findings }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  sast:
+    if: inputs.run_sast
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Semgrep
+        run: python -m pip install --user semgrep
+      - name: Run Semgrep community rules
+        continue-on-error: ${{ !inputs.fail_on_findings }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          semgrep scan --config auto --error --metrics off .
+
+  sca:
+    if: inputs.run_sca
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Trivy filesystem vulnerability scan
+        uses: aquasecurity/trivy-action@0.33.1
+        continue-on-error: ${{ !inputs.fail_on_findings }}
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+  iac:
+    if: inputs.run_iac
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Detect IaC files
+        id: detect
+        shell: bash
+        run: |
+          if find . -type f \( -name '*.tf' -o -name '*.tf.json' -o -name 'Chart.yaml' -o -name 'template.yaml' -o -name 'serverless.yml' \) -print -quit | grep -q .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Checkov
+        if: steps.detect.outputs.found == 'true'
+        run: python -m pip install --user checkov
+      - name: Check Terraform and other IaC
+        if: steps.detect.outputs.found == 'true'
+        continue-on-error: ${{ !inputs.fail_on_findings }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          checkov --directory . --quiet --compact --framework terraform terraform_plan kubernetes cloudformation helm serverless --skip-download
+
+  actions-security:
+    if: inputs.run_actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Detect GitHub Actions workflows
+        id: detect
+        shell: bash
+        run: |
+          if find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print -quit 2>/dev/null | grep -q .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install zizmor
+        if: steps.detect.outputs.found == 'true'
+        run: python -m pip install --user zizmor
+      - name: Audit GitHub Actions
+        if: steps.detect.outputs.found == 'true'
+        continue-on-error: ${{ !inputs.fail_on_findings }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          zizmor --min-severity medium --format plain .github/workflows
