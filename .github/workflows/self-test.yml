@@ -1,0 +1,21 @@
+name: Self test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    uses: ./.github/workflows/security.yml
+    with:
+      run_secrets: true
+      run_sast: true
+      run_sca: true
+      run_iac: true
+      run_actions: true
+      fail_on_findings: false
